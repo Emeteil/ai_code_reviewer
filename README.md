@@ -80,6 +80,10 @@ All inputs are optional.
 | `comment-mode` | `update` (edit one comment) or `create` (new each run) | `update` |
 | `include-previous` | Feed the previous AI review of this PR into the context | `true` |
 | `include-comments` | Save other reviewers' comments into `pr-comments/others/` | `true` |
+| `snippets-dir` | Directory in your repo overriding the bundled `prompts/snippets/*.md` (per-file; missing ones fall back) | `` (bundled) |
+| `comment-marker` | Hidden marker identifying the comment; change it to run several independent reviewers on one PR | `<!-- ai-code-review -->` |
+| `opencode-args` | Extra CLI args passed to `opencode run` | `` |
+| `fail-on-error` | Fail the job if the model call fails, instead of posting a fallback comment | `false` |
 | `opencode-api-key` | API key for the opencode provider (if the model needs one) | `` |
 | `github-token` | Token used to read PR data and post the comment | `${{ github.token }}` |
 
@@ -116,6 +120,8 @@ result is posted/updated as a PR comment.
 - `prompts/main.md` — the reviewer's role, rules and output format. Usually no need
   to change. The `{{LANGUAGE}}` placeholder is substituted from the `language` input.
 - `project-context.md` (in your repo) — everything specific to your project.
+- `prompts/snippets/*.md` — the small injected texts (section notes, the comment
+  footer, fallback messages). Override any of them per-file via `snippets-dir`.
 
 To override the bundled core prompt, point `main-prompt-file` at a file in your repo.
 
