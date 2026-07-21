@@ -1,0 +1,308 @@
+name: 'AI Code Review'
+description: 'Agentic AI code review for pull requests via opencode: structured, context-aware, remembers previous passes.'
+author: 'Emeteil'
+
+branding:
+  icon: 'check-circle'
+  color: 'purple'
+
+inputs:
+  model:
+    description: 'opencode model id.'
+    required: false
+    default: 'opencode/deepseek-v4-flash-free'
+  language:
+    description: 'Language of the review output.'
+    required: false
+    default: 'English'
+  max-diff-bytes:
+    description: 'Maximum diff size (in bytes) included in the prompt.'
+    required: false
+    default: '40000'
+  main-prompt-file:
+    description: 'Path to the core reviewer prompt. Empty = the bundled prompts/main.md.'
+    required: false
+    default: ''
+  project-context-file:
+    description: 'Path (in the caller repo) to a project-specific context prompt. Skipped if the file does not exist.'
+    required: false
+    default: '.github/ai-review/project-context.md'
+  extra-instructions:
+    description: 'Extra one-off instructions appended to the prompt.'
+    required: false
+    default: ''
+  title:
+    description: 'Heading used for the PR comment.'
+    required: false
+    default: '🤖 AI Code Review'
+  comment-mode:
+    description: 'update = edit a single comment; create = post a new comment each run.'
+    required: false
+    default: 'update'
+  include-previous:
+    description: 'Feed the previous AI review of this PR into the context.'
+    required: false
+    default: 'true'
+  include-comments:
+    description: 'Save other reviewers'' comments into pr-comments/others/ for on-demand reading.'
+    required: false
+    default: 'true'
+  opencode-api-key:
+    description: 'API key for the opencode provider (if the model requires one).'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token used to read PR data and post the comment.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install opencode
+      shell: bash
+      run: npm install -g opencode-ai
+
+    - name: Collect diff and context
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        MAX_DIFF_BYTES: ${{ inputs.max-diff-bytes }}
+      run: |
+        set -euo pipefail
+
+        MERGE_BASE="$(git merge-base "$BASE_SHA" "$HEAD_SHA" || echo "$BASE_SHA")"
+
+        git diff "$MERGE_BASE" "$HEAD_SHA" > diff.txt
+        head -c "$MAX_DIFF_BYTES" diff.txt > diff_trimmed.txt
+
+        {
+          echo "PR TITLE: ${PR_TITLE:-(none)}"
+          echo ""
+          echo "PR DESCRIPTION:"
+          echo "${PR_BODY:-(none)}"
+          echo ""
+          echo "COMMITS:"
+          git log --no-merges --pretty=format:'- %s' "$MERGE_BASE".."$HEAD_SHA" || true
+          echo ""
+          echo ""
+          echo "CHANGED FILES:"
+          git diff --name-status "$MERGE_BASE" "$HEAD_SHA" || true
+        } > pr_context.txt
+
+        if [ "$(wc -c < diff.txt)" -gt "$MAX_DIFF_BYTES" ]; then
+          echo "" >> diff_trimmed.txt
+          echo "... [DIFF TRUNCATED: showing the first $MAX_DIFF_BYTES bytes. Read the rest from the repository files.]" >> diff_trimmed.txt
+        fi
+
+    - name: Collect PR comments
+      uses: actions/github-script@v7
+      env:
+        INCLUDE_PREVIOUS: ${{ inputs.include-previous }}
+        INCLUDE_COMMENTS: ${{ inputs.include-comments }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          const marker = '<!-- ai-code-review -->';
+          const includePrevious = process.env.INCLUDE_PREVIOUS !== 'false';
+          const includeComments = process.env.INCLUDE_COMMENTS !== 'false';
+
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+
+          const baseDir = 'pr-comments';
+          const othersDir = path.join(baseDir, 'others');
+          fs.mkdirSync(othersDir, { recursive: true });
+
+          const issueComments = await github.paginate(github.rest.issues.listComments, {
+            owner, repo, issue_number, per_page: 100,
+          });
+
+          const ourComments = issueComments.filter(c => c.body && c.body.includes(marker));
+          if (includePrevious && ourComments.length > 0) {
+            const last = ourComments[ourComments.length - 1];
+            fs.writeFileSync(path.join(baseDir, 'previous_ai_review.md'), last.body || '');
+            core.info(`Saved previous AI review (comment #${last.id}).`);
+          }
+
+          if (includeComments) {
+            let idx = 0;
+            const dump = (kind, author, when, extra, body) => {
+              const safeAuthor = String(author || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_');
+              const name = `${String(idx).padStart(3, '0')}_${kind}_${safeAuthor}.md`;
+              const header = `Author: ${author}\nDate: ${when || '?'}\nType: ${kind}${extra ? ` (${extra})` : ''}\n\n`;
+              fs.writeFileSync(path.join(othersDir, name), header + (body || ''));
+              idx++;
+            };
+
+            for (const c of issueComments) {
+              if (c.body && c.body.includes(marker)) continue;
+              dump('conversation', c.user && c.user.login, c.created_at, null, c.body);
+            }
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: issue_number, per_page: 100,
+            });
+            for (const r of reviews) {
+              if (!r.body) continue;
+              dump('review', r.user && r.user.login, r.submitted_at, r.state, r.body);
+            }
+
+            const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
+              owner, repo, pull_number: issue_number, per_page: 100,
+            });
+            for (const c of reviewComments) {
+              const loc = `${c.path}:${c.line ?? c.original_line ?? '?'}`;
+              dump('inline', c.user && c.user.login, c.created_at, loc, c.body);
+            }
+
+            core.info(`Saved ${idx} other comment file(s) to ${othersDir}/`);
+          }
+
+    - name: Assemble prompt
+      shell: bash
+      env:
+        LANGUAGE: ${{ inputs.language }}
+        MAIN_PROMPT_FILE: ${{ inputs.main-prompt-file }}
+        PROJECT_CONTEXT_FILE: ${{ inputs.project-context-file }}
+        EXTRA_INSTRUCTIONS: ${{ inputs.extra-instructions }}
+        INCLUDE_PREVIOUS: ${{ inputs.include-previous }}
+        INCLUDE_COMMENTS: ${{ inputs.include-comments }}
+      run: |
+        set -euo pipefail
+
+        MAIN_PROMPT="${MAIN_PROMPT_FILE:-$GITHUB_ACTION_PATH/prompts/main.md}"
+
+        {
+          echo "=== INSTRUCTIONS ==="
+          echo ""
+          if [ -f "$MAIN_PROMPT" ]; then
+            MAIN_PROMPT_TEXT="$(cat "$MAIN_PROMPT")"
+            echo "${MAIN_PROMPT_TEXT//\{\{LANGUAGE\}\}/$LANGUAGE}"
+          else
+            echo "You are a code reviewer. Analyze the diff below. Respond in $LANGUAGE."
+          fi
+
+          if [ -n "$EXTRA_INSTRUCTIONS" ]; then
+            echo ""
+            echo "=== EXTRA INSTRUCTIONS ==="
+            echo "$EXTRA_INSTRUCTIONS"
+          fi
+
+          if [ -n "$PROJECT_CONTEXT_FILE" ] && [ -f "$PROJECT_CONTEXT_FILE" ]; then
+            echo ""
+            echo "=== PROJECT CONTEXT ==="
+            echo ""
+            cat "$PROJECT_CONTEXT_FILE"
+          fi
+
+          echo ""
+          echo "=== PR / GIT CONTEXT ==="
+          echo ""
+          cat pr_context.txt
+
+          if [ "$INCLUDE_PREVIOUS" != "false" ] && [ -f pr-comments/previous_ai_review.md ]; then
+            echo ""
+            echo "=== PREVIOUS AI REVIEW ==="
+            echo ""
+            echo "Below is your previous review comment on THIS same PR (previous run)."
+            echo "Rely on the CURRENT diff: treat a finding as valid only if it is still"
+            echo "visible in the code. Note what is already fixed. Do not repeat verbatim."
+            echo ""
+            cat pr-comments/previous_ai_review.md
+          fi
+
+          if [ "$INCLUDE_COMMENTS" != "false" ] && [ -d pr-comments/others ] && [ -n "$(ls -A pr-comments/others 2>/dev/null)" ]; then
+            echo ""
+            echo "=== OTHER PR COMMENTS ==="
+            echo ""
+            echo "The pr-comments/others/ folder holds comments from other reviewers and"
+            echo "participants on this PR (one file per comment: author, date, type, text)."
+            echo "They are NOT inlined here to avoid bloating the context. Read them via your"
+            echo "file-reading tools IF relevant — e.g. if an author or reviewer there explains"
+            echo "why the code is written a certain way. Files:"
+            ls -1 pr-comments/others/ | sed 's/^/- pr-comments\/others\//'
+          fi
+
+          echo ""
+          echo "=== DIFF (diff_trimmed.txt) ==="
+          echo ""
+          cat diff_trimmed.txt
+        } > prompt.txt
+
+        echo "Prompt size: $(wc -c < prompt.txt) bytes"
+
+    - name: Run AI review
+      shell: bash
+      env:
+        AI_REVIEW_MODEL: ${{ inputs.model }}
+        OPENCODE_API_KEY: ${{ inputs.opencode-api-key }}
+      run: |
+        set -euo pipefail
+        opencode run --model "$AI_REVIEW_MODEL" "$(cat prompt.txt)" > review_raw.md || true
+
+        if grep -qm1 '^## ' review_raw.md; then
+          awk 'f || /^## / { print; f = 1 }' review_raw.md > review.md
+        else
+          cp review_raw.md review.md
+        fi
+
+        echo "Review size: $(wc -c < review.md) bytes"
+
+    - name: Post or update PR comment
+      uses: actions/github-script@v7
+      env:
+        AI_REVIEW_TITLE: ${{ inputs.title }}
+        AI_REVIEW_MODEL: ${{ inputs.model }}
+        AI_REVIEW_COMMENT_MODE: ${{ inputs.comment-mode }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- ai-code-review -->';
+          const title = process.env.AI_REVIEW_TITLE;
+          const model = process.env.AI_REVIEW_MODEL;
+          const commentMode = process.env.AI_REVIEW_COMMENT_MODE;
+
+          let review = '';
+          try { review = fs.readFileSync('review.md', 'utf8').trim(); } catch (e) {}
+          if (!review) {
+            review = '_Could not get a response from the AI model. Check the workflow logs._';
+          }
+
+          const body = `${marker}\n## ${title}\n\n${review}\n\n---\n<sub>Model: \`${model}\`. This review is advisory and covers only the changes in this PR.</sub>`;
+
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+
+          let existing = null;
+          if (commentMode !== 'create') {
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            existing = comments.find(c => c.body && c.body.includes(marker));
+          }
+
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            core.info(`Updated existing review comment #${existing.id}`);
+          } else {
+            const created = await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            core.info(`Created new review comment #${created.data.id}`);
+          }
