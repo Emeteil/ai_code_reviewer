@@ -1,4 +1,4 @@
-name: 'AI Code Review'
+name: 'AI Code Review based on Opencode'
 description: 'Agentic AI code review for pull requests via opencode: structured, context-aware, remembers previous passes.'
 author: 'Emeteil'
 
