@@ -1,0 +1,26 @@
+# Copy this file into your repository as .github/workflows/ai-review.yml
+# and pin the action to a released tag (e.g. @v1.0.0).
+
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Emeteil/ai_code_reviewer@v1.0.0
+        with:
+          # All inputs are optional; sensible defaults are used when omitted.
+          language: English
+          # model: opencode/deepseek-v4-flash-free
+          # project-context-file: .github/ai-review/project-context.md
+          # comment-mode: update
+          # Only needed if the chosen model requires a provider key:
+          opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
