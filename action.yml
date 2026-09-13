@@ -8,9 +8,9 @@ branding:
 
 inputs:
   model:
-    description: 'opencode model id.'
+    description: 'opencode model id. If empty, opencode uses its own default model.'
     required: false
-    default: 'opencode/deepseek-v4-flash-free'
+    default: ''
   language:
     description: 'Language of the review output.'
     required: false

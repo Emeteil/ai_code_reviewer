@@ -6,9 +6,8 @@ A GitHub Action that automatically reviews every Pull Request with an agentic LL
 ([opencode](https://opencode.ai)) and leaves a structured comment.
 
 > **Completely free — no sign-up, no API key.** opencode offers several models for
-> free without registration or API keys (the default `opencode/deepseek-v4-flash-free`
-> is one of them). So you can wire the reviewer into your project at zero cost:
-> just add the workflow, no secrets required.
+> free without registration or API keys. So you can wire the reviewer into your
+> project at zero cost: just add the workflow, no secrets required.
 >
 > ⚠️ **Not recommended for sensitive code.** Free models may log or train on the
 > data you send them. Do **not** use them for enterprise/proprietary code or
@@ -55,7 +54,7 @@ jobs:
   ai-review:
     runs-on: ubuntu-latest
     steps:
-      - uses: Emeteil/ai_code_reviewer@v1
+      - uses: Emeteil/ai_code_reviewer@v1.0.2
         with:
           language: English
           # Only needed if the chosen model requires a provider key:
@@ -70,7 +69,7 @@ All inputs are optional.
 
 | Input | Description | Default |
 | --- | --- | --- |
-| `model` | opencode model id | `opencode/deepseek-v4-flash-free` |
+| `model` | opencode model id | `""` (opencode default) |
 | `language` | Language of the review output | `English` |
 | `max-diff-bytes` | Max diff size (bytes) included in the prompt | `40000` |
 | `main-prompt-file` | Path to the core reviewer prompt (empty = bundled `prompts/main.md`) | `` (bundled) |
