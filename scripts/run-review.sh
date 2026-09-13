@@ -3,8 +3,13 @@
 # Env: AI_REVIEW_MODEL, OPENCODE_API_KEY, OPENCODE_ARGS, FAIL_ON_ERROR
 set -euo pipefail
 
+MODEL_ARGS=()
+if [ -n "$AI_REVIEW_MODEL" ]; then
+  MODEL_ARGS=(--model "$AI_REVIEW_MODEL")
+fi
+
 # shellcheck disable=SC2086 # OPENCODE_ARGS is intentionally word-split into CLI args
-if opencode run --model "$AI_REVIEW_MODEL" $OPENCODE_ARGS "$(cat prompt.txt)" > review_raw.md; then
+if opencode run "${MODEL_ARGS[@]}" $OPENCODE_ARGS "$(cat prompt.txt)" > review_raw.md; then
   :
 elif [ "$FAIL_ON_ERROR" = "true" ]; then
   echo "opencode run failed and fail-on-error is enabled." >&2
