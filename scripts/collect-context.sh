@@ -17,11 +17,11 @@ head -c "$MAX_DIFF_BYTES" diff.txt > diff_trimmed.txt
   echo "${PR_BODY:-(none)}"
   echo ""
   echo "COMMITS:"
-  git log --no-merges --pretty=format:'- %s' "$MERGE_BASE".."$HEAD_SHA" || true
+  git log --no-merges --pretty=format:'- %s' "$MERGE_BASE".."$HEAD_SHA" | head -n 100 || true
   echo ""
   echo ""
   echo "CHANGED FILES:"
-  git diff --name-status "$MERGE_BASE" "$HEAD_SHA" || true
+  git diff --name-status "$MERGE_BASE" "$HEAD_SHA" | head -n 300 || true
 } > pr_context.txt
 
 if [ "$(wc -c < diff.txt)" -gt "$MAX_DIFF_BYTES" ]; then

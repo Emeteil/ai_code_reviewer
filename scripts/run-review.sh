@@ -9,7 +9,7 @@ if [ -n "$AI_REVIEW_MODEL" ]; then
 fi
 
 # shellcheck disable=SC2086 # OPENCODE_ARGS is intentionally word-split into CLI args
-if opencode run "${MODEL_ARGS[@]}" $OPENCODE_ARGS "$(cat prompt.txt)" > review_raw.md; then
+if opencode run "${MODEL_ARGS[@]}" $OPENCODE_ARGS --file prompt.txt -- "Follow the instructions in the attached prompt.txt file and produce the review." > review_raw.md; then
   :
 elif [ "$FAIL_ON_ERROR" = "true" ]; then
   echo "opencode run failed and fail-on-error is enabled." >&2
